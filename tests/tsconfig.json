@@ -1,0 +1,1 @@
+{"extends":"../tsconfig.json","compilerOptions":{"noEmit":false,"incremental":false,"outDir":"../.test-build","module":"commonjs","moduleResolution":"node","isolatedModules":false},"include":["./*.test.ts","../src/lib/game-engine.ts","../src/types/game.ts"],"exclude":["../node_modules"]}
