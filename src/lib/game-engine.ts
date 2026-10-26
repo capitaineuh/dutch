@@ -1,4 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
+import { slotPosition, validPosition, freePosition } from './grid';
+import { motionEvent, atSlot, atHeld } from './motions';
 import type { Action, Card, Player, Room, Suit, Target, View } from '@/types/game';
 export const points = (c: Card) => c.rank === 13 && (c.suit === '♥' || c.suit === '♦') ? 0 : c.rank;
 const fail = (message: string): never => { throw new Error(message); };
@@ -14,9 +16,9 @@ export function player(name: string): Player { if (typeof name !== 'string' || !
 export function createRoom(pin: string, p: Player, settings: Room['settings']): Room { return { pin, host: p.id, players: [p], phase: 'lobby', round: 0, settings: { rounds: Math.max(1, Math.min(20, Number(settings.rounds) || 5)), seconds: Math.max(10, Math.min(120, Number(settings.seconds) || 25)), limit: Math.max(0, Math.min(1000, Number(settings.limit) || 0)) }, deck: [], discard: [], active: 0, step: 'draw', held: null, source: 'deck', deadline: 0, caller: null, remaining: [], extra: false, gift: null, reveals: [], logs: [], results: {}, version: 0, swap: null }; }
 function log(r: Room, text: string) { r.logs.unshift({ id: randomUUID(), text, at: Date.now() }); r.logs = r.logs.slice(0, 80); }
 function timer(r: Room) { r.deadline = Date.now() + r.settings.seconds * 1000; }
-export function startRound(r: Room) { r.suspended = []; r.round++; r.deck = deck(r.players.length > 4 ? 2 : 1); r.discard = []; r.caller = null; r.remaining = []; r.gift = null; r.held = null; r.extra = false; r.reveals = []; r.results = {}; r.active = (r.round - 1) % r.players.length; r.step = 'draw'; for (const p of r.players) {
+export function startRound(r: Room) { r.motions = []; r.suspended = []; r.round++; r.deck = deck(r.players.length > 4 ? 2 : 1); r.discard = []; r.caller = null; r.remaining = []; r.gift = null; r.held = null; r.extra = false; r.reveals = []; r.results = {}; r.active = (r.round - 1) % r.players.length; r.step = 'draw'; for (const p of r.players) {
     p.seen = false;
-    p.slots = Array.from({ length: 4 }, () => ({ id: randomUUID(), card: r.deck.pop()! }));
+    p.slots = Array.from({ length: 4 }, (_, i) => ({ id: randomUUID(), card: r.deck.pop()!, position: {col:i%2,row:Math.floor(i/2)} }));
 } r.discard.push(r.deck.pop()!); r.phase = 'memory'; r.deadline = Date.now() + 15000; log(r, `Manche ${r.round} : mémorisez vos deux cartes du bas.`); }
 function draw(r: Room): Card { if (!r.deck.length) {
     const top = r.discard.pop();
@@ -85,6 +87,7 @@ else if (r.phase === 'playing') {
             const own = r.players[r.active].slots.find(s => s.card);
             if (own) {
                 const replaced = own.card!;
+                motionEvent(r,{from:atHeld(r.players[r.active].id),to:atSlot({player:r.players[r.active].id,slot:own.id}),face:null},{from:atSlot({player:r.players[r.active].id,slot:own.id}),to:{zone:'discard'},face:replaced});
                 own.card = r.held;
                 r.held = null;
                 r.discard.push(replaced);
@@ -95,6 +98,7 @@ else if (r.phase === 'playing') {
         const c = r.held;
         r.held = null;
         r.discard.push(c);
+        motionEvent(r,{from:atHeld(r.players[r.active].id),to:{zone:'discard'},face:c});
         power(r, c);
         return;
     }
@@ -102,7 +106,7 @@ else if (r.phase === 'playing') {
 } }
 function give(r: Room, p: Player, t?: Target) { if (r.gift?.actor !== p.id)
     fail('Aucun don en attente.'); const own = slot(r, t); if (own.p.id !== p.id)
-    fail('Choisissez votre carte.'); const target = r.players.find(x => x.id === r.gift!.target.player)!.slots.find(s => s.id === r.gift!.target.slot)!; target.card = own.s.card; own.s.card = null; r.gift = null; const top = r.discard.at(-1); if (top)
+    fail('Choisissez votre carte.'); const target = r.players.find(x => x.id === r.gift!.target.player)!.slots.find(s => s.id === r.gift!.target.slot)!; motionEvent(r, {from:atSlot(t!),to:atSlot(r.gift!.target),face:null}); target.card = own.s.card; own.s.card = null; r.gift = null; const top = r.discard.at(-1); if (top)
     snapPower(r, p, top); auto(r, p); }
 export function act(r: Room, p: Player, a: Action) {
     tick(r);
@@ -131,6 +135,18 @@ export function act(r: Room, p: Player, a: Action) {
     }
     if (r.phase !== 'playing')
         fail('La manche n’est pas en cours.');
+    if (a.type === 'move') {
+        if (p.id === r.caller || r.gift) fail('Vos cartes ne peuvent pas ?tre d?plac?es maintenant.');
+        if (!validPosition(a.position)) fail('Position de grille invalide.');
+        const own = slot(r, a.target);
+        if (own.p.id !== p.id) fail('Vous pouvez uniquement d?placer vos propres cartes.');
+        const before = slotPosition(own.s, p.slots.indexOf(own.s));
+        const destination = a.position!;
+        const other = p.slots.find((s,i) => {const pos=slotPosition(s,i); return s!==own.s && pos.col===destination.col && pos.row===destination.row;});
+        if (other) other.position = before;
+        own.s.position = destination;
+        return;
+    }
     if (a.type === 'give') {
         give(r, p, a.target);
         return;
@@ -148,7 +164,9 @@ export function act(r: Room, p: Player, a: Action) {
             fail('Les cartes du crieur sont verrouillées.');
         if (s.card!.rank !== top!.rank) {
             reveal(r, s.card!, '*', 1800);
-            p.slots.push({ id: randomUUID(), card: draw(r) });
+            const penalty = { id: randomUUID(), card: draw(r), position: freePosition(p.slots) };
+            p.slots.push(penalty);
+            motionEvent(r, {from:{zone:'deck'},to:atSlot({player:p.id,slot:penalty.id}),face:null});
             log(r, `${p.name} manque sa coupe : une carte de pénalité.`);
             return;
         }
@@ -157,6 +175,7 @@ export function act(r: Room, p: Player, a: Action) {
         const c = s.card!;
         s.card = null;
         r.discard.push(c);
+        motionEvent(r, {from:atSlot(a.target!),to:{zone:'discard'},face:c});
         log(r, `${p.name} coupe avec succès !`);
         if (owner.id !== p.id) {
             r.gift = { actor: p.id, target: a.target! };
@@ -178,6 +197,7 @@ export function act(r: Room, p: Player, a: Action) {
             r.held = a.type === 'draw' ? draw(r) : (r.discard.pop() ?? fail('Défausse vide.'));
             r.source = a.type === 'draw' ? 'deck' : 'discard';
             r.step = 'held';
+            motionEvent(r, {from:{zone:a.type==='draw'?'deck':'discard'},to:atHeld(p.id),face:a.type==='take'?r.held:null});
             log(r, `${p.name} ${a.type === 'draw' ? 'pioche une carte face cachée' : 'prend la défausse'}.`);
             break;
         case 'replace': {
@@ -187,6 +207,7 @@ export function act(r: Room, p: Player, a: Action) {
             if (owner.id !== p.id)
                 fail('Choisissez une de vos cartes.');
             const c = s.card!;
+            motionEvent(r, {from:atHeld(p.id),to:atSlot(a.target!),face:null}, {from:atSlot(a.target!),to:{zone:'discard'},face:c});
             s.card = r.held;
             r.held = null;
             r.discard.push(c);
@@ -201,6 +222,7 @@ export function act(r: Room, p: Player, a: Action) {
                 const c = r.held!;
                 r.held = null;
                 r.discard.push(c);
+                motionEvent(r, {from:atHeld(p.id),to:{zone:'discard'},face:c});
                 log(r, `${p.name} défausse ${label(c)}.`);
                 power(r, c);
             }
@@ -219,6 +241,7 @@ export function act(r: Room, p: Player, a: Action) {
             if (x.s === y.s)
                 fail('Choisissez deux cartes différentes.');
             [x.s.card, y.s.card] = [y.s.card, x.s.card];
+            motionEvent(r, {from:atSlot(a.target!),to:atSlot(a.second!),face:null}, {from:atSlot(a.second!),to:atSlot(a.target!),face:null});
             r.swap = { first: a.target!, second: a.second!, at: Date.now() };
             r.step = 'end';
             log(r, `${p.name} échange deux cartes à l’aveugle.`);
@@ -238,4 +261,4 @@ export function act(r: Room, p: Player, a: Action) {
     }
 }
 export function label(c: Card) { return `${({ 1: 'As', 11: 'Valet', 12: 'Dame', 13: 'Roi' } as Record<number, string>)[c.rank] ?? c.rank}${c.suit}`; }
-export function view(r: Room, p: Player): View { const { deck: cards, players, held, reveals, discard, suspended, ...rest } = r; return { ...rest, me: p.id, deckCount: cards.length, top: discard.at(-1) ?? null, held: r.players[r.active]?.id === p.id ? held : null, players: players.map(({ token: secret, slots, ...other }) => ({ ...other, slots: slots.map((s, i) => ({ id: s.id, occupied: !!s.card, card: s.card && (r.phase === 'results' || r.phase === 'finished' || (r.phase === 'memory' && other.id === p.id && !other.seen && i >= 2) || reveals.some(v => (v.audience === p.id || v.audience === '*') && v.card === s.card!.id && v.until > Date.now())) ? s.card : null })) })) }; }
+export function view(r: Room, p: Player): View { const { deck: cards, players, held, reveals, discard, suspended, ...rest } = r; return { ...rest, me: p.id, deckCount: cards.length, top: discard.at(-1) ?? null, held: r.players[r.active]?.id === p.id ? held : null, players: players.map(({ token: secret, slots, ...other }) => ({ ...other, slots: slots.map((s, i) => ({ id: s.id, position: slotPosition(s,i), occupied: !!s.card, card: s.card && (r.phase === 'results' || r.phase === 'finished' || (r.phase === 'memory' && other.id === p.id && !other.seen && i >= 2) || reveals.some(v => (v.audience === p.id || v.audience === '*') && v.card === s.card!.id && v.until > Date.now())) ? s.card : null })) })) }; }

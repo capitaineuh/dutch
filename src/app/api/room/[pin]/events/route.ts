@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
-import { tick, view } from '@/lib/game-engine';
-import { transact } from '@/lib/room-store';
+import { roomView } from '@/lib/room-service';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -17,9 +16,7 @@ export async function GET(req: NextRequest, ctx: {
     let stop = false;
     const stream = new ReadableStream({ async start(controller) { const until = Date.now() + 25000; req.signal.addEventListener('abort', () => { stop = true; }); try {
             while (!stop && Date.now() < until) {
-                const data = await transact(pin, r => { if (!r)
-                    throw new Error('Salon introuvable'); const p = r.players.find(p => p.token === token); if (!p)
-                    throw new Error('Session invalide'); tick(r); p.lastSeen = Date.now(); return { room: r, result: view(r, p) }; });
+                const data = await roomView(pin, token);
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
                 await new Promise(resolve => setTimeout(resolve, 300));
             }

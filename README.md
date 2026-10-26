@@ -30,6 +30,10 @@ La synchronisation intégrée utilise un polling séquentiel de 300 ms et Broadc
 
 ## Règles et décisions
 
+- Le bouton « Organiser mes cartes » ouvre une grille de rangement de quatre colonnes. Glisser une carte à la souris ou au doigt, ou sélectionner une carte puis une case au clavier. Déposer sur une autre carte permute leurs positions. Les positions sont enregistrées sur le serveur, visibles des autres joueurs et conservées après reconnexion. Le rangement est disponible hors de la mémorisation et des sélections de pouvoirs/remplacement ; les cartes du crieur et les emplacements réservés à un don sont verrouillés.
+- Les mouvements de pioche, défausse, remplacement, coupe, don, pénalité et Valet sont animés pour tous les joueurs. Les événements ne transportent jamais la valeur d’une carte privée. La carte piochée arrive dans la zone « Carte piochée », puis rejoint visiblement l’emplacement sélectionné. Les préférences de réduction des animations sont respectées.
+- Un panneau de consignes reste visible au-dessus du plateau, avec les actions, le compte à rebours et un avertissement dans les huit dernières secondes. Le titre de l’onglet signale également les actions attendues.
+
 - Un paquet jusqu’à quatre joueurs, deux à partir de cinq. Roi rouge : 0 ; Roi noir : 13.
 - Mémorisation privée de 15 secondes maximum, arrêtée plus tôt lorsque tous ont confirmé.
 - Une action normale se termine par « Terminer mon tour » ou « Dutch ». Le bouton Dutch devient disponible à cette étape, jamais avant une pioche.
@@ -45,7 +49,7 @@ La synchronisation intégrée utilise un polling séquentiel de 300 ms et Broadc
 
 Le serveur est autoritaire. Le jeton aléatoire d’un joueur autorise uniquement sa vue et ses actions, et n’apparaît pas dans les vues des autres joueurs. Une carte cachée n’a ni rang ni couleur transmis : seul son emplacement et son occupation sont publics. Les cartes en mémoire, les visions de Dame et les cartes piochées sont filtrées par destinataire. Les révélations de coupe ratée sont publiques pendant 1,8 seconde.
 
-Les mutations locales sont sérialisées par salon dans leur ordre d’arrivée et travaillent sur une copie transactionnelle. Redis utilise un verrou par salon et une validation atomique par Lua avant l’écriture ; une requête concurrente sur une autre instance peut recevoir « action en cours » et doit être retentée. Il n’y a pas de garantie FIFO globale entre régions Vercel. Les tests couvrent les règles déterministes ; une campagne de charge distribuée reste nécessaire avant une ouverture publique à grande échelle. Il n’y a pas de comptes, de modération ni de protection contre le spam de création de salons dans cette version.
+Les lectures de synchronisation chargent un instantané Redis atomique sans prendre de verrou ni réécrire la partie. Le heartbeat n’est enregistré qu’environ toutes les 15 secondes ; une expiration de tour est traitée sous verrou après relecture. Les mutations locales sont sérialisées par salon et travaillent sur une copie transactionnelle. Redis protège les écritures par verrou avec courte attente et validation atomique Lua. Une contention persistante sur une écriture renvoie HTTP 503, jamais un HTTP 400 de lecture normale. Le client empêche les pollings simultanés et affiche les interruptions transitoires dans un indicateur de reconnexion, sans popup. Il n’y a pas de garantie FIFO globale entre régions Vercel. Les tests couvrent aussi la concurrence avec un transport Redis simulé ; une campagne de charge sur Redis réel reste nécessaire avant une ouverture publique à grande échelle.
 
 Le service worker ne met jamais en cache les API ni les cartes privées. Il précache les icônes et affiche un message de connexion nécessaire si le réseau est absent. Le jeu multijoueur nécessite le réseau. Le manifeste fournit des icônes SVG normale et maskable ; l’expérience d’installation dépend du navigateur.
 
@@ -67,6 +71,11 @@ public/
   icon-180.png
   sw.js
 src/
+  components/
+    playing-card.tsx
+    hand-grid.tsx             grille tactile, souris et clavier
+    card-movements.tsx        trajets des cartes pour tous les joueurs
+    turn-notice.tsx           consignes et actions visibles
   app/
     layout.tsx
     page.tsx                 accueil, lobby, plateau, journal, règles, résultats
@@ -79,10 +88,15 @@ src/
   lib/
     game-engine.ts           règles autoritaires et projection privée
     room-store.ts            stockage transactionnel mémoire / Upstash
+    room-service.ts          lectures sans verrou et maintenance des délais
+    grid.ts                  positions et allocation des cases
+    motions.ts               événements de mouvement sans cartes privées
     client-store.ts          Zustand, session et synchronisation
   types/game.ts
 tests/
   game-engine.test.ts
+  room-store.test.ts
+  client-store.test.ts
   tsconfig.json
 ```
 

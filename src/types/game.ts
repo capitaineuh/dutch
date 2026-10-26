@@ -7,7 +7,12 @@ export type Card = {
 export type Slot = {
     id: string;
     card: Card | null;
+    position?: GridPosition;
 };
+export type GridPosition = { col: number; row: number };
+export type CardLocation = { zone: 'deck' | 'discard' | 'held' | 'slot'; player?: string; slot?: string };
+export type CardMovement = { from: CardLocation; to: CardLocation; face: Card | null };
+export type MotionEvent = { id: string; at: number; moves: CardMovement[] };
 export type Player = {
     id: string;
     token: string;
@@ -23,12 +28,14 @@ export type Target = {
     slot: string;
 };
 export type Action = {
-    type: 'ready' | 'start' | 'memorized' | 'draw' | 'take' | 'discard' | 'replace' | 'peek' | 'swap' | 'snap' | 'give' | 'end' | 'dutch' | 'next';
+    type: 'ready' | 'start' | 'memorized' | 'draw' | 'take' | 'discard' | 'replace' | 'peek' | 'swap' | 'snap' | 'give' | 'end' | 'dutch' | 'next' | 'move';
     target?: Target;
     second?: Target;
     top?: string;
+    position?: GridPosition;
 };
 export type Room = {
+    motions?: MotionEvent[];
     suspended?: {
         active: number;
         step: Room['step'];
@@ -83,6 +90,7 @@ export type PublicPlayer = Omit<Player, 'token' | 'slots'> & {
         id: string;
         card: Card | null;
         occupied: boolean;
+        position?: GridPosition;
     }[];
 };
 export type View = Omit<Room, 'deck' | 'players' | 'held' | 'reveals' | 'discard' | 'suspended'> & {
